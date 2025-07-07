@@ -1,0 +1,398 @@
+%% JDE on real data
+
+clear 
+close all
+set(groot,'defaultAxesXGrid','on')
+set(groot,'defaultAxesYGrid','on')
+set(groot,'defaulttextinterpreter','latex');  
+set(groot, 'defaultAxesTickLabelInterpreter','latex');  
+set(groot, 'defaultLegendInterpreter','latex');
+set(groot,'DefaultLineLineWidth',1)
+
+addpath("Functions")
+%
+directory_name= "Subjects_for_MATLAB";
+subject_name = "CR017";
+% subject_name = "CR022";
+session_date = "2019-11-13";session_num = "3";
+% session_date = "2020-10-07"; session_num = "5";
+% session_date = "2019-11-14";session_num = "5";
+session_type = "checkerboard";
+
+
+data_path = fullfile(pwd,directory_name,subject_name,session_date,session_type,session_num,"data.mat");
+save_path = fullfile(pwd,"Results_parcel", "without_preprocess","informative");
+
+load(data_path)
+
+fs = 1/f_dt;
+fc = 0.3;     % cut-off frequency
+Y = double(permute(PDI,[2,3,1]));   % Dimension [H x W x N]
+Y = Y(:,:,10:end-10); % Cut the last 10 samples
+
+% [N x M], (:,1)=left, (:,2)=center, (:,3)=right
+stimulus = stim(10:end-10,:); % Cut the first and last 10 samples
+t_PDI = t_PDI(10:end-10);
+
+
+% Dimensions
+H = size(Y,1);    % Height
+W = size(Y,2);    % Width
+N = size(Y,3);              % Number of time samples
+M = size(stimulus,2);    % Number of EPs
+K = 2;                   % Number of activation states
+L_h = 35;               % Filter length of HRF  (10.5s)
+L_r = 12;               % Filter length of NRF  (4s)
+
+mask_set = {};
+mask1 = zeros(H,W);
+mask1(21:60,1:25) = 1;
+mask2 = zeros(H,W);
+mask2(36:60,26:38) = 1;
+mask3 = zeros(H,W);
+mask3(40:65,42:55) = 1;
+mask4 = zeros(H,W);
+mask4(30:60,55:78) = 1;
+
+mask_set{1} = mask1;
+mask_set{2} = mask2;
+mask_set{3} = mask3;
+mask_set{4} = mask4;
+mask_dims = {};
+mask_dims{1} = [40, 25];
+mask_dims{2} = [25,13];
+mask_dims{3} = [26,14];
+mask_dims{4} = [31,24];
+
+onset = (diag(ones(N,1)) - diag(ones(N-1,1),-1))*stimulus;
+onset(onset < 0) = 0;
+X = zeros(N,L_r+L_h-1,M);
+for m=1:M
+    X(:,:,m) = toeplitz(onset(:,m),[onset(1,m);zeros(L_r+L_h-2,1)]);
+end
+
+%% Some visualization
+some_plot = 0;
+if some_plot
+figure;
+tiledlayout("flow")
+nexttile
+imagesc(mean(Y,3))
+colormap('parula');
+colorbar
+title('Mean PDI')
+hold on
+draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+hold off;
+
+
+nexttile
+y_corr = corr(reshape(Y,H*W,[])',reshape(Y,H*W,[])');
+imagesc(reshape(sum(y_corr,2),H,W)/(H*W))
+colorbar
+title('"Average" correlation')
+
+hold on
+draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+hold off;
+
+[~,idx] = max(mean(Y,3),[],"all"); % index for max mean
+[h,w] = ind2sub([H,W],idx);
+pixel_set = [h, w;
+             10, 10;
+             36, 62;
+             46, 58];
+
+for i = 1:size(pixel_set,1)
+    pixel_h = pixel_set(i,1);
+    pixel_w = pixel_set(i,2);
+    y_corr =  corr(squeeze(Y(pixel_h,pixel_w,:)),reshape(Y,H*W,[])');
+
+    nexttile
+    imagesc(reshape(y_corr,H,W))
+    colorbar
+    clim([-1,1])
+    title(sprintf('Correlation with pixel(%d,%d)',pixel_h,pixel_w))
+    hold on
+    draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+    hold off;
+end
+
+figure;
+tiledlayout("flow")
+mean_thresh1 = 0.35e6;
+mean_thresh2 = 0.01e6;
+vein_nobrain_mask = (mean(Y,3)>mean_thresh1) + (mean(Y,3)<mean_thresh2);
+nexttile
+imagesc(vein_nobrain_mask)
+title('vein and outside of brain')
+hold on
+draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+hold off
+
+nexttile
+imagesc(vein_nobrain_mask~=1)
+title('ROI')
+hold on
+draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+hold off
+
+%%
+delay_range = 7;
+figure;
+tiledlayout("flow",'Padding','tight','TileSpacing','tight')
+% Phi = zeros(H,W,M,K);
+for m=1:M
+    for i = 1:length(delay_range)
+
+        delay = delay_range(i);
+        delayed = circshift(stimulus(:,m),delay); delayed(1:delayed) = 0;
+        y_corr =  corr(delayed,reshape(Y,H*W,[])');
+        y_corr(abs(y_corr)<0.08) = 0;
+        % pat = reshape(y_corr,H,W);
+        % pat(pat ~= 0) = 1;
+        % Phi(:,:,m,1) = pat;
+        nexttile
+        imagesc(reshape(y_corr,H,W))
+        colorbar
+        title(sprintf('PCC with stimulus %d (delay %d)',m,delay))
+        hold on
+        draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+        hold off;
+    end
+end
+%%
+figure;
+tiledlayout("flow")
+nexttile
+pixel_h = h;
+pixel_w = w;
+yyaxis left
+plot(t_PDI,squeeze(Y(pixel_h,pixel_w,:)),DisplayName="PDI")
+yyaxis right
+plot(t_PDI,onset,DisplayName="Onset", LineStyle="-")
+ylim([0,10])
+title(sprintf('PDI at pixel(%d,%d)',pixel_h,pixel_w))
+
+nexttile
+pixel_h = 10;
+pixel_w = 10;
+yyaxis left
+plot(t_PDI,squeeze(Y(pixel_h,pixel_w,:)),DisplayName="PDI")
+yyaxis right
+plot(t_PDI,onset,DisplayName="Onset", LineStyle="-")
+ylim([0,10])
+title(sprintf('PDI at pixel(%d,%d)',pixel_h,pixel_w))
+
+nexttile
+pixel_h = 36;
+pixel_w = 62;
+yyaxis left
+plot(t_PDI,squeeze(Y(pixel_h,pixel_w,:)),DisplayName="PDI")
+yyaxis right
+plot(t_PDI,onset,DisplayName="Onset", LineStyle="-")
+ylim([0,10])
+title(sprintf('PDI at pixel(%d,%d)',pixel_h,pixel_w))
+
+nexttile
+pixel_h = 46;
+pixel_w = 58;
+yyaxis left
+plot(t_PDI,squeeze(Y(pixel_h,pixel_w,:)),DisplayName="PDI")
+yyaxis right
+plot(t_PDI,onset,DisplayName="Onset", LineStyle="-")
+ylim([0,10])
+title(sprintf('PDI at pixel(%d,%d)',pixel_h,pixel_w))
+end
+%% Set all necessary parameters
+
+fmin = 0.02; % Highest frequency in DCT to be captured as drift
+Ldim = ceil(2*N/fs*fmin)+1; % Number of basis
+
+P1 = dctmtx(N);          % DCT
+P1 = P1(1:Ldim,:)';
+P = P1;
+
+% HRF kernel
+D = eye(L_h)*-2 + diag(ones(1,L_h-1),1) + diag(ones(1,L_h-1),-1); % Second-order centered Difference matrix
+
+D(1,1) = -50;  % penalize large start and end 
+D(end,end) = -50;
+R = fs^-4*inv(D'*D); % Covariance of base distribution for HRF
+R = R + eye(L_h)*0.001; % For condition number
+%% Kernels for NRLs
+
+% SS kernel
+lambda_ss = 100;
+alpha_ss = 0.84;
+kernel = zeros(L_r);
+for j=1:L_r
+    for k=1:L_r
+        kernel(j,k) = lambda_ss*(alpha_ss^(k+j+max(j,k))/2 - alpha_ss^(3*max(j,k))/6);
+    end
+end
+
+kernel = kernel + eye(L_r)*0.0005*lambda_ss; % For condition number
+
+loc = zeros(L_r,1); % prior mean of NRF
+loc_r = zeros(L_r,M,K);
+
+% Concatenate: gt_kernel [L_r x L_r x M x K]
+kernel1 = cat(3,kernel,kernel,kernel);
+
+% For neural state 2 (non-active) under EP1 
+kernel_21 = det(kernel)^(1/L_r)*eye(L_r);
+
+% For neural state 2 (non-active) under EP2
+kernel_22 = det(kernel)^(1/L_r)*eye(L_r);
+
+% For neural state 2 (non-active) under EP3
+kernel_23 = det(kernel)^(1/L_r)*eye(L_r);
+
+kernel2 = cat(3,kernel_21,kernel_22,kernel_23);
+
+Sigma_K = cat(4,kernel1,kernel2);
+
+if some_plot
+    figure;plot(mvnrnd(loc,kernel,100)')
+end
+
+
+
+loc_h=load(fullfile(pwd,'initializations/muh_init.mat'),"-mat","mu_h");
+loc_h = loc_h.mu_h;
+
+%% RUN
+seed_range = 1; % Informative has no random initialization so keep this to 1
+num_iter = 100;
+for parcel_id = 1:length(mask_set)
+% for parcel_id = 1:1
+    parcel = Y(repmat(mask_set{parcel_id}==1,1,1,N));
+    dims = [mask_dims{parcel_id},N];
+    parcel = reshape(parcel,dims);
+    % parcel = filloutliers(reshape(parcel,[],N)',"linear","movmean",200);
+    % parcel = reshape(parcel',dims);
+
+    for j = 1:length(seed_range)
+        seed = seed_range(j);
+        rng(seed)
+    
+        % Initialization
+        sigma_b = var(parcel,0,3);
+        sigma_h = 100;
+        
+        Sigma_h = eye(L_h)*0.01;
+        mu_h = loc_h;
+        load(fullfile(pwd,"initializations/Phi_init_3.mat"))
+        Phi =  reshape(Phi(repmat(mask_set{parcel_id}==1,1,1,M,K)),dims(1),dims(2),M,K);
+        Beta = 0.88*ones(M,1);
+        
+        u_lb = 0.8;
+        u_ub = 2;
+    
+        L_coef = JdeUpdateVML(0*mu_h,0*zeros([size(parcel,[1,2]),L_r*M]),X,parcel,P);
+    
+        [Sigma_r, mu_r, Sigma_h, mu_h, Phi, Beta, Beta_dens, sigma_b, L_coef, ELBO, sigma_h] = ...
+        RunJDE(num_iter, X, parcel, Sigma_h, mu_h, Phi, P, L_coef, Beta, sigma_b, sigma_h, Sigma_K, R, u_lb, u_ub,false,false, 0, loc_r,loc_h);
+    
+        %%% Save the results from RunJDE at save_path + \kernel_name + 'SNR_' + SNR + '_seed' + seed.mat   %%%
+        % Create folder if it doesn't exist
+        if ~exist(save_path, 'dir')
+            mkdir(save_path);
+        end
+    
+        % Construct file name
+        filename = sprintf('parcel_%d_seed_%d.mat', parcel_id,seed);
+        full_save_path = fullfile(save_path, filename);
+    
+        % Save relevant variables
+        save(full_save_path, ...
+            'parcel','X','Sigma_r', 'mu_r', 'Sigma_h', 'mu_h', 'sigma_h', ...
+            'Phi', 'Beta', 'Beta_dens', 'P', ...
+            'sigma_b', 'L_coef', 'ELBO','u_lb', 'u_ub', ...
+             'seed','Sigma_K','loc_r');
+    
+    end
+end
+%%
+Y = parcel;
+H = size(Y,1);
+W = size(Y,2);
+N = size(Y,3);
+M = size(X,3);
+L_r = size(mu_r,3)/M;
+L_h = length(mu_h);
+mask1 = zeros(H,W);
+mask1(21:60,1:25) = 1;
+mask2 = zeros(H,W);
+mask2(36:60,26:38) = 1;
+mask3 = zeros(H,W);
+mask3(40:65,42:55) = 1;
+mask4 = zeros(H,W);
+mask4(30:60,55:78) = 1;
+figure;
+tiledlayout('flow')
+nexttile
+imagesc(Phi(:,:,1))
+hold on
+% draw_boundaries(mask1,mask2)
+% draw_boundaries(mask3,mask4)
+% draw_boundaries(slice_PDI_mask_lh, slice_PDI_mask_rh)
+
+colorbar
+
+nexttile
+imagesc(Phi(:,:,2))
+hold on
+% draw_boundaries(mask1,mask2)
+% draw_boundaries(mask3,mask4)
+colorbar
+
+nexttile
+imagesc(Phi(:,:,3))
+hold on
+% draw_boundaries(mask1,mask2)
+% draw_boundaries(mask3,mask4)
+colorbar
+
+%%
+figure;
+plot(mu_h)
+
+figure;
+tiledlayout("flow")
+for m = 1:M % over EPs
+    % Reshape NRFs from [H, W, 2*L_r] to [H*W, L_r]
+    NRF_est = reshape(mu_r(:,:,:), H*W, []);
+    est_nrf = NRF_est(:, (m-1)*L_r+1:m*L_r);
+
+    % Plot all NRFs
+    nexttile
+    plot(est_nrf', 'LineWidth', 0.5);
+end
+
+figure;
+imagesc(sigma_b)
+colorbar
+
+figure;imagesc(reshape(mean(P*reshape(L_coef,[],size(L_coef,3))',1),H,W))
+colorbar
+
+
+%% FUNCTION
+
+function draw_boundaries(probe_left, probe_right)
+    % Get boundaries of left mask
+    B_lh = bwboundaries(probe_left);
+    for k = 1:length(B_lh)
+        boundary = B_lh{k};
+        plot(boundary(:,2), boundary(:,1), 'w', 'LineWidth', 1.5); 
+    end
+    
+    % Get boundaries of right mask
+    B_rh = bwboundaries(probe_right);
+    for k = 1:length(B_rh)
+        boundary = B_rh{k};
+        plot(boundary(:,2), boundary(:,1), 'w', 'LineWidth', 1.5); 
+    end
+end
